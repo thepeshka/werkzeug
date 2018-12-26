@@ -109,7 +109,7 @@ class BaseCache(object):
     def __init__(self, default_timeout=300):
         self.default_timeout = default_timeout
 
-    def _normalize_timeout(self, timeout):
+    def _normalize_timeout(self, timeout, timeout_type="delay"):
         if timeout is None:
             timeout = self.default_timeout
         return timeout
@@ -156,7 +156,7 @@ class BaseCache(object):
         """
         return dict(zip(keys, self.get_many(*keys)))
 
-    def set(self, key, value, timeout=None):
+    def set(self, key, value, timeout=None, timeout_type="delay"):
         """Add a new key/value to the cache (overwrites value, if key already
         exists in the cache).
 
@@ -165,6 +165,7 @@ class BaseCache(object):
         :param timeout: the cache timeout for the key in seconds (if not
                         specified, it uses the default timeout). A timeout of
                         0 idicates that the cache never expires.
+        :param timeout_type: type of timeout to normalize
         :returns: ``True`` if key has been updated, ``False`` for backend
                   errors. Pickling errors, however, will raise a subclass of
                   ``pickle.PickleError``.
@@ -306,9 +307,9 @@ class SimpleCache(BaseCache):
             for key in toremove:
                 self._cache.pop(key, None)
 
-    def _normalize_timeout(self, timeout):
+    def _normalize_timeout(self, timeout, timeout_type="delay"):
         timeout = BaseCache._normalize_timeout(self, timeout)
-        if timeout > 0:
+        if timeout > 0 and timeout_type == "delay":
             timeout = time() + timeout
         return timeout
 
@@ -320,8 +321,8 @@ class SimpleCache(BaseCache):
         except (KeyError, pickle.PickleError):
             return None
 
-    def set(self, key, value, timeout=None):
-        expires = self._normalize_timeout(timeout)
+    def set(self, key, value, timeout=None, timeout_type="delay"):
+        expires = self._normalize_timeout(timeout, timeout_type)
         self._prune()
         self._cache[key] = (expires, pickle.dumps(value,
                                                   pickle.HIGHEST_PROTOCOL))
@@ -407,9 +408,9 @@ class MemcachedCache(BaseCache):
             key = self.key_prefix + key
         return key
 
-    def _normalize_timeout(self, timeout):
+    def _normalize_timeout(self, timeout, timeout_type="delay"):
         timeout = BaseCache._normalize_timeout(self, timeout)
-        if timeout > 0:
+        if timeout > 0 and timeout_type == "delay":
             timeout = int(time()) + timeout
         return timeout
 
@@ -447,9 +448,9 @@ class MemcachedCache(BaseCache):
         timeout = self._normalize_timeout(timeout)
         return self._client.add(key, value, timeout)
 
-    def set(self, key, value, timeout=None):
+    def set(self, key, value, timeout=None, timeout_type="delay"):
         key = self._normalize_key(key)
-        timeout = self._normalize_timeout(timeout)
+        timeout = self._normalize_timeout(timeout, timeout_type)
         return self._client.set(key, value, timeout)
 
     def get_many(self, *keys):
@@ -587,7 +588,7 @@ class RedisCache(BaseCache):
             self._client = host
         self.key_prefix = key_prefix or ''
 
-    def _normalize_timeout(self, timeout):
+    def _normalize_timeout(self, timeout, timeout_type = "delay"):
         timeout = BaseCache._normalize_timeout(self, timeout)
         if timeout == 0:
             timeout = -1
@@ -627,8 +628,8 @@ class RedisCache(BaseCache):
             keys = [self.key_prefix + key for key in keys]
         return [self.load_object(x) for x in self._client.mget(keys)]
 
-    def set(self, key, value, timeout=None):
-        timeout = self._normalize_timeout(timeout)
+    def set(self, key, value, timeout=None, timeout_type="delay"):
+        timeout = self._normalize_timeout(timeout, timeout_type)
         dump = self.dump_object(value)
         if timeout == -1:
             result = self._client.set(name=self.key_prefix + key,
@@ -743,9 +744,9 @@ class FileSystemCache(BaseCache):
             new_count = value or 0
         self.set(self._fs_count_file, new_count, mgmt_element=True)
 
-    def _normalize_timeout(self, timeout):
+    def _normalize_timeout(self, timeout, timeout_type = "delay"):
         timeout = BaseCache._normalize_timeout(self, timeout)
-        if timeout != 0:
+        if timeout != 0 and timeout_type == "delay":
             timeout = time() + timeout
         return int(timeout)
 
@@ -812,7 +813,7 @@ class FileSystemCache(BaseCache):
             return self.set(key, value, timeout)
         return False
 
-    def set(self, key, value, timeout=None, mgmt_element=False):
+    def set(self, key, value, timeout=None, mgmt_element=False, timeout_type="delay"):
         # Management elements have no timeout
         if mgmt_element:
             timeout = 0
@@ -821,7 +822,7 @@ class FileSystemCache(BaseCache):
         else:
             self._prune()
 
-        timeout = self._normalize_timeout(timeout)
+        timeout = self._normalize_timeout(timeout, timeout_type)
         filename = self._get_filename(key)
         try:
             fd, tmp = tempfile.mkstemp(suffix=self._fs_transaction_suffix,
@@ -903,9 +904,9 @@ class UWSGICache(BaseCache):
     def delete(self, key):
         return self._uwsgi.cache_del(key, self.cache)
 
-    def set(self, key, value, timeout=None):
+    def set(self, key, value, timeout=None, timeout_type="delay"):
         return self._uwsgi.cache_update(key, pickle.dumps(value),
-                                        self._normalize_timeout(timeout),
+                                        self._normalize_timeout(timeout, timeout_type),
                                         self.cache)
 
     def add(self, key, value, timeout=None):
